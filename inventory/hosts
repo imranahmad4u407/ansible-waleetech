@@ -1,0 +1,5 @@
+[servers]
+server2 ansible_host=192.168.159.133
+server3 ansible_host=192.168.159.134
+[all:vars]
+ansible_python_interpreter=/usr/bin/pytho

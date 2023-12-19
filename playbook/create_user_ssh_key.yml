@@ -1,0 +1,104 @@
+---
+- name: Create User on Remote Hosts
+  hosts: all
+  become: yes
+
+  vars_prompt:
+    - name: new_username
+      prompt: "Enter the username for the new user:"
+      private: no
+
+    - name: new_user_password
+      prompt: "Enter the password for the new user:"
+      private: ye
+
+  tasks:
+    - name: Check if user exists
+      command: "id {{ new_username }}"
+      ignore_errors: true
+      register: user_exists
+
+    - name: Print existing user and exit if user already exists
+      debug:
+        msg: "User '{{ new_username }}' already exists."
+      when: user_exists.rc == 0
+      run_once: true
+
+    - name: Create user if it does not exist
+      user:
+        name: "{{ new_username }}"
+        password: "{{ new_user_password | password_hash('sha256') }}"
+        state: present
+        createhome: yes
+
+    - name: Give root access to the new user
+      lineinfile:
+        dest: /etc/sudoers
+        line: "{{ new_username }} ALL=(ALL) NOPASSWD: ALL"
+        validate: 'visudo -cf %s'
+
+    - name: Give access to /home/ubuntu directory
+      file:
+        path: /home/ubuntu
+        state: directory
+        owner: "{{ new_username }}"
+        group: "{{ new_username }}"
+        mode: 0755
+
+- name: Create SSH Key
+  hosts: localhost
+  gather_facts: false
+
+  vars_prompt:
+    - name: ssh_key_filename
+      prompt: "Enter the filename for the new SSH key (without extension):"
+      private: no
+
+    - name: ssh_key_comment
+      prompt: "Enter a comment for the SSH key (optional):"
+      private: no
+
+  tasks:
+    - name: Check if .ssh/UserKeys directory exists
+      stat:
+        path: "~/.ssh/UserKeys"
+      register: ssh_directory_exists
+
+    - name: Create .ssh/UserKeys directory if it doesn't exist
+      file:
+        path: "~/.ssh/UserKeys"
+        state: directory
+        mode: "0700"
+      when: not ssh_directory_exists.stat.exists
+
+    - name: Generate SSH key without passphrase
+      command: "ssh-keygen -t rsa -b 4096 -f ~/.ssh/UserKeys/{{ ssh_key_filename }} -C '{{ ssh_key_comment }}' -N \"\""
+      args:
+        creates: "~/.ssh/UserKeys/{{ ssh_key_filename }}"
+
+    - name: Display public key
+      command: "cat ~/.ssh/UserKeys/{{ ssh_key_filename }}.pub"
+      register: public_key
+
+    - name: Display information
+      debug:
+        msg: "SSH key '{{ ssh_key_filename }}' has been generated. Public key:\n{{ public_key.stdout }}"
+
+- name: Add SSH Key to Authorized Keys
+  hosts: all
+  become: true
+
+  vars_prompt:
+    - name: ssh_key_filename
+      prompt: "Enter the filename of the SSH key (without extension):"
+      private: no
+
+  tasks:
+    - name: Add SSH Key to authorized_keys
+      lineinfile:
+        path: /home/ubuntu/.ssh/authorized_keys
+        line: "{{ lookup('file', '/home/ubuntu/.ssh/UserKeys/' + ssh_key_filename + '.pub') }}"
+        create: yes
+        owner: ubuntu
+        group: ubuntu
+        mode: 0644
